@@ -1,0 +1,3 @@
+[submodule "smart-common"]
+	path = smart-common
+	url = git@github.com:KennyDaktyl/smart-common.git
