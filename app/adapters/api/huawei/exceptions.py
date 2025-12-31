@@ -1,2 +1,0 @@
-class HuaweiRateLimitException(Exception):
-    pass
