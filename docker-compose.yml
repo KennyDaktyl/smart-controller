@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  smart-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ENV: "development"
+      LOG_DIR: "/app/logs"
+      NATS_URL: "nats://nats:4222"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_NAME: "smartenergy"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+      JWT_SECRET: "replace-me"
+      FERNET_KEY: "replace-me"
+      EMAIL_HOST: "smtp.example.com"
+      EMAIL_PORT: "587"
+      EMAIL_FROM: "noreply@example.com"
+      PROVIDER_REFRESH_INTERVAL_SEC: "60"
+      PROVIDER_DEFAULT_POLL_INTERVAL_SEC: "60"
+      PROVIDER_MAX_CONCURRENCY: "25"
+    depends_on:
+      - postgres
+      - nats
+    volumes:
+      - ./logs:/app/logs
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: "smartenergy"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+    ports:
+      - "5432:5432"
+
+  nats:
+    image: nats:2.10
+    ports:
+      - "4222:4222"
