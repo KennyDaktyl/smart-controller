@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Any
@@ -142,13 +143,16 @@ class ProviderPoller:
         context: dict[str, Any],
     ) -> None:
         entity_id = _entity_id_from_provider(provider)
-        subject = subject_for_entity(entity_id)
+        # subject = subject_for_entity(entity_id)
+        subject_env = os.getenv("SUBJECT")
+        subject = subject_env.replace("*", entity_id)
         payload = build_event_payload(
             event_type=CURRENT_ENERGY_EVENT_TYPE,
             entity_type="provider",
             entity_id=entity_id,
             data=_measurement_event_data(measurement),
             source=EVENT_SOURCE,
+            subject=subject,
         )
         logger.info(
             "Publishing measurement to NATS",
