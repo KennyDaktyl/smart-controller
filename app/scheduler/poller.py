@@ -1,4 +1,3 @@
-# app/scheduler/poller.py
 from __future__ import annotations
 
 import asyncio
@@ -10,14 +9,15 @@ from datetime import datetime
 from typing import Any
 
 from smart_common.models.provider import NormalizedMeasurement, Provider
-from smart_common.nats.event_helpers import build_event_payload, subject_for_entity
+from smart_common.nats.event_helpers import build_event_payload
 
 try:
     from smart_common.repositories.measurement_repository import MeasurementRepository
-except ImportError:
-    MeasurementRepository = None
+except ImportError as e:
+    raise RuntimeError("MeasurementRepository import failed") from e
 
 logger = logging.getLogger(__name__)
+
 EVENT_SOURCE = "smart-controller"
 CURRENT_ENERGY_EVENT_TYPE = "CURRENT_ENERGY"
 
@@ -40,46 +40,81 @@ class ProviderPoller:
             if hasattr(vendor, "value")
             else str(vendor) if vendor else None
         )
+
         poll_id = uuid.uuid4().hex
         task_name = f"provider-{provider_id}"
+
         context = {
+            "taskName": task_name,
             "provider_id": provider_id,
             "vendor": vendor_label,
-            "taskName": task_name,
             "poll_id": poll_id,
         }
+
+        logger.info(
+            "POLL START",
+            extra={
+                **context,
+                "provider_class": type(provider).__name__,
+                "adapter_class": type(adapter).__name__ if adapter else None,
+            },
+        )
+
+        if adapter is None:
+            raise RuntimeError(f"Adapter is None for provider_id={provider_id}")
+
+        subject_env = os.getenv("SUBJECT")
+        if not subject_env:
+            raise RuntimeError("SUBJECT env variable is missing")
+
         adapter.poll_id = poll_id
         adapter.task_name = task_name
 
         provider_unit_hint = _resolve_provider_unit(provider)
+
         async with self._semaphore:
-            logger.info("Polling provider start", extra=context)
+            logger.info("FETCH START", extra=context)
+
             measurement: NormalizedMeasurement
             persisted = None
             fetch_failed = False
+
             try:
                 raw_measurement = await self._fetch_measurement(adapter)
-                measurement = _attach_provider_unit(raw_measurement, provider_unit_hint)
+
                 logger.info(
-                    "Provider fetch successful",
+                    "FETCH END",
+                    extra={
+                        **context,
+                        "raw_value": getattr(raw_measurement, "value", None),
+                        "raw_unit": getattr(raw_measurement, "unit", None),
+                    },
+                )
+
+                measurement = _attach_provider_unit(raw_measurement, provider_unit_hint)
+
+                logger.info(
+                    "PROVIDER FETCH OK",
                     extra={
                         **context,
                         "value": measurement.value,
                         "unit": measurement.unit,
                     },
                 )
-                # Ensure scheduling uses the latest successful fetch timestamp
+
                 persisted = await self._persist_measurement(
                     provider,
                     measurement,
                     poll_id=poll_id,
                 )
+
             except Exception as exc:
                 fetch_failed = True
                 logger.exception(
-                    "Provider poll failed",
+                    "PROVIDER POLL FAILED",
                     extra={**context, "error": str(exc)},
                 )
+
                 measurement = _build_error_measurement(
                     provider_id=provider_id,
                     poll_id=poll_id,
@@ -87,10 +122,12 @@ class ProviderPoller:
                     error=exc,
                     unit_hint=provider_unit_hint,
                 )
+
             await self._publish_measurement(provider, measurement, context)
+
             if fetch_failed:
                 logger.info(
-                    "Publishing error measurement",
+                    "POLL FINISHED WITH ERROR",
                     extra={
                         **context,
                         "metadata": measurement.metadata,
@@ -98,7 +135,7 @@ class ProviderPoller:
                 )
             else:
                 logger.info(
-                    "Provider poll succeeded",
+                    "POLL FINISHED OK",
                     extra={
                         **context,
                         "measurement_persisted": persisted is not None,
@@ -107,6 +144,7 @@ class ProviderPoller:
 
     async def _fetch_measurement(self, adapter: Any) -> NormalizedMeasurement:
         fetch = adapter.fetch_measurement
+
         if asyncio.iscoroutinefunction(fetch):
             return await fetch()
 
@@ -120,17 +158,27 @@ class ProviderPoller:
         poll_id: str,
     ) -> object | None:
         provider_id = getattr(provider, "id", None)
-        if MeasurementRepository is None:
-            logger.debug(
-                "MeasurementRepository extension unavailable; skipping persistence",
-                extra={"provider_id": provider_id, "poll_id": poll_id},
-            )
-            return None
+
+        logger.info(
+            "PERSIST ATTEMPT",
+            extra={
+                "provider_id": provider_id,
+                "poll_id": poll_id,
+                "value": measurement.value,
+                "unit": measurement.unit,
+            },
+        )
 
         entry = await _call_repo_save(provider, measurement, poll_id=poll_id)
+
         if entry is None:
-            logger.debug(
-                "Measurement data unchanged; persistence skipped",
+            logger.info(
+                "PERSIST SKIPPED (UNCHANGED)",
+                extra={"provider_id": provider_id, "poll_id": poll_id},
+            )
+        else:
+            logger.info(
+                "PERSIST OK",
                 extra={"provider_id": provider_id, "poll_id": poll_id},
             )
 
@@ -143,9 +191,10 @@ class ProviderPoller:
         context: dict[str, Any],
     ) -> None:
         entity_id = _entity_id_from_provider(provider)
-        # subject = subject_for_entity(entity_id)
+
         subject_env = os.getenv("SUBJECT")
         subject = subject_env.replace("*", entity_id)
+
         payload = build_event_payload(
             event_type=CURRENT_ENERGY_EVENT_TYPE,
             entity_type="provider",
@@ -154,15 +203,26 @@ class ProviderPoller:
             source=EVENT_SOURCE,
             subject=subject,
         )
+
         logger.info(
-            "Publishing measurement to NATS",
+            "NATS PUBLISH START",
             extra={
                 **context,
                 "subject": subject,
-                "payload_size": len(json.dumps(payload)),
+                "value": measurement.value,
+                "unit": measurement.unit,
             },
         )
+
         await self._publisher.publish(subject, payload, context=context)
+
+        logger.info(
+            "NATS PUBLISH OK",
+            extra={
+                **context,
+                "subject": subject,
+            },
+        )
 
 
 def _build_error_measurement(
@@ -181,13 +241,14 @@ def _build_error_measurement(
             "poll_id": poll_id,
         }
     }
-    unit_hint_value = unit_hint or None
-    if unit_hint_value is not None:
-        metadata["unit_source"] = unit_hint_value
+
+    if unit_hint:
+        metadata["unit_source"] = unit_hint
+
     return NormalizedMeasurement(
         provider_id=provider_id or 0,
         value=None,
-        unit=unit_hint_value,
+        unit=unit_hint,
         measured_at=datetime.utcnow(),
         metadata=metadata,
     )
@@ -198,10 +259,11 @@ def _attach_provider_unit(
     provider_unit: str | None,
 ) -> NormalizedMeasurement:
     resolved_unit = provider_unit or measurement.unit
-    # Don't mutate adapter values; just tag provider unit so downstream consumes know the domain source.
+
     metadata = dict(measurement.metadata or {})
     if resolved_unit:
         metadata.setdefault("unit_source", resolved_unit)
+
     return NormalizedMeasurement(
         provider_id=measurement.provider_id,
         value=measurement.value,
@@ -248,8 +310,17 @@ async def _call_repo_save(
     def _save() -> object | None:
         from smart_common.core.db import get_db
 
+        logger.info(
+            "DB SAVE START",
+            extra={
+                "provider_id": getattr(provider, "id", None),
+                "poll_id": poll_id,
+            },
+        )
+
         db_gen = get_db()
         db = next(db_gen)
+
         try:
             repo = MeasurementRepository(db)
             entry = repo.save_measurement(
@@ -258,10 +329,28 @@ async def _call_repo_save(
                 poll_id=poll_id,
             )
             db.commit()
+
+            logger.info(
+                "DB SAVE COMMIT",
+                extra={
+                    "provider_id": getattr(provider, "id", None),
+                    "poll_id": poll_id,
+                },
+            )
+
             return entry
+
         except Exception:
             db.rollback()
+            logger.exception(
+                "DB SAVE FAILED",
+                extra={
+                    "provider_id": getattr(provider, "id", None),
+                    "poll_id": poll_id,
+                },
+            )
             raise
+
         finally:
             try:
                 next(db_gen)
