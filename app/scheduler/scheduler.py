@@ -433,6 +433,8 @@ def _provider_signature(provider: Any) -> str:
     signature = {
         "id": getattr(provider, "id", None),
         "vendor": getattr(provider, "vendor", None),
+        "external_id": getattr(provider, "external_id", None),
+        "power_source": getattr(provider, "power_source", None),
         "config": getattr(provider, "config", None),
         "expected_interval_sec": getattr(provider, "expected_interval_sec", None),
     }
