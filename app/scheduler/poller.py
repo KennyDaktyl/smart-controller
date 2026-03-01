@@ -281,11 +281,18 @@ def _resolve_provider_unit(provider: Provider) -> str | None:
 
 
 def _measurement_event_data(measurement: NormalizedMeasurement) -> dict[str, Any]:
+    system_metadata, extra_data = MeasurementRepository.split_metadata(
+        measurement.metadata
+    )
+
     return {
         "value": measurement.value,
         "unit": measurement.unit,
         "measured_at": measurement.measured_at.isoformat(),
-        "metadata": dict(measurement.metadata or {}),
+        "metadata": {
+            "system": system_metadata,
+            "extra": extra_data,
+        },
     }
 
 
