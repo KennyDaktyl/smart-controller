@@ -7,12 +7,28 @@ import os
 import sys
 import platform
 
+import sentry_sdk
+
 from smart_common.smart_logging.task_logging import install_task_logger
 from app.lifecycle import run
 
 install_task_logger()
 
 logger = logging.getLogger("bootstrap")
+
+
+def _init_sentry() -> None:
+    sentry_dsn = os.getenv("SENTRY_DSN")
+    if not sentry_dsn:
+        logger.info("Sentry disabled (SENTRY_DSN is not set)")
+        return
+
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        send_default_pii=True,
+        environment=os.getenv("ENV", "development"),
+    )
+    logger.info("Sentry enabled for ENV=%s", os.getenv("ENV", "development"))
 
 
 def main() -> None:
@@ -49,6 +65,8 @@ def main() -> None:
         "LOG_LEVEL",
     ]:
         logger.info("ENV %s=%s", key, os.getenv(key))
+
+    _init_sentry()
 
     logger.info("=== STARTING ASYNCIO LOOP ===")
     asyncio.run(run())
