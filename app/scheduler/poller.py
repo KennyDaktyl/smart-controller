@@ -122,6 +122,17 @@ class ProviderPoller:
                     error=exc,
                     unit_hint=provider_unit_hint,
                 )
+                try:
+                    persisted = await self._persist_measurement(
+                        provider,
+                        measurement,
+                        poll_id=poll_id,
+                    )
+                except Exception as persist_exc:
+                    logger.exception(
+                        "ERROR MEASUREMENT PERSIST FAILED",
+                        extra={**context, "error": str(persist_exc)},
+                    )
 
             await self._publish_measurement(provider, measurement, context)
 
