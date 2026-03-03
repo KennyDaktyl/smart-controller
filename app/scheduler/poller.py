@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from smart_common.models.provider import NormalizedMeasurement, Provider
@@ -106,6 +106,7 @@ class ProviderPoller:
                     provider,
                     measurement,
                     poll_id=poll_id,
+                    force_insert=False,
                 )
 
             except Exception as exc:
@@ -127,6 +128,7 @@ class ProviderPoller:
                         provider,
                         measurement,
                         poll_id=poll_id,
+                        force_insert=True,
                     )
                 except Exception as persist_exc:
                     logger.exception(
@@ -142,6 +144,7 @@ class ProviderPoller:
                     extra={
                         **context,
                         "metadata": measurement.metadata,
+                        "measurement_persisted": persisted is not None,
                     },
                 )
             else:
@@ -167,6 +170,7 @@ class ProviderPoller:
         measurement: NormalizedMeasurement,
         *,
         poll_id: str,
+        force_insert: bool = False,
     ) -> object | None:
         provider_id = getattr(provider, "id", None)
 
@@ -177,10 +181,16 @@ class ProviderPoller:
                 "poll_id": poll_id,
                 "value": measurement.value,
                 "unit": measurement.unit,
+                "force_insert": force_insert,
             },
         )
 
-        entry = await _call_repo_save(provider, measurement, poll_id=poll_id)
+        entry = await _call_repo_save(
+            provider,
+            measurement,
+            poll_id=poll_id,
+            force_insert=force_insert,
+        )
 
         if entry is None:
             logger.info(
@@ -260,7 +270,7 @@ def _build_error_measurement(
         provider_id=provider_id or 0,
         value=None,
         unit=unit_hint,
-        measured_at=datetime.utcnow(),
+        measured_at=datetime.now(timezone.utc),
         metadata=metadata,
     )
 
@@ -324,6 +334,7 @@ async def _call_repo_save(
     measurement: NormalizedMeasurement,
     *,
     poll_id: str,
+    force_insert: bool = False,
 ) -> object | None:
     def _save() -> object | None:
         from smart_common.core.db import get_db
@@ -345,6 +356,7 @@ async def _call_repo_save(
                 provider,
                 measurement,
                 poll_id=poll_id,
+                force_insert=force_insert,
             )
             db.commit()
 
